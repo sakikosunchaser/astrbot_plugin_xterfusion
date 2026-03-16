@@ -14,8 +14,8 @@ COOLDOWN = 8    # 每群8秒防刷屏
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "本地mp3关键词单条语音-修正版",
-    "v1.8.1",
+    "本地mp3关键词单条语音-三斜杠极致修正",
+    "v1.8.2",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -54,7 +54,6 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
     group_id = getattr(msg_obj, "group_id", None) if msg_obj else None
     if not group_id:
         return
-    # 防刷
     now = time.time()
     if now - self.last_group_send.get(group_id, 0) < COOLDOWN:
         return
@@ -62,13 +61,12 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
     if not matched:
         return
     self.last_group_send[group_id] = now
-    # 随机选一个音频（与新三国一致）
     audio_path = random.choice(matched)
     logger.info(f"[xterfusion] 命中，发送语音: {audio_path}")
 
-    # 正确标准的 CQ:record 三斜杠路径
-    abs_path = audio_path.resolve().as_posix()
-    cq = f"[CQ:record,file=file:///{abs_path}]"
+    # 三斜杠：file:///绝对路径（绝对路径无首斜杠）
+    abs_path_noslash = audio_path.resolve().as_posix().lstrip('/')
+    cq = f"[CQ:record,file=file:///{abs_path_noslash}]"
     logger.info(f"[xterfusion] send record file CQ: {cq}")
     if hasattr(event, "raw_result"):
         yield event.raw_result(cq)
