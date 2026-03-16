@@ -19,8 +19,8 @@ VOICE_CACHE_FILENAME = "split.mp3"
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "群聊关键词触发语音-超兼容新三国完全体",
-    "v1.3.2",
+    "群聊关键词触发语音（完全仿新三国插件写法）",
+    "v1.3.3",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -44,11 +44,15 @@ class XterFusionPlugin(Star):
             self.voice_path.write_bytes(r.content)
             logger.error("[xterfusion] voice download OK: %s", self.voice_path)
 
-# ======= handler必须在类外部，并确保第一个参数为 self =======
 @filter.regex(r"only feels like", ignore_case=True)
 async def g_voice(self: XterFusionPlugin, event):
+    # 完全照新三国插件事件兼容判法
     e = getattr(event, "raw_event", None)
-    logger.error(f"[xterfusion] handler triggered, event.raw_event: {e!r}")
+    if not isinstance(e, dict):
+        e = getattr(event, "event", None)
+    if not isinstance(e, dict):
+        e = getattr(event, "data", None)
+    logger.error(f"[xterfusion] handler triggered, event dict: {e!r}")
     if not isinstance(e, dict) or e.get("message_type") != "group":
         logger.error(f"[xterfusion] not group, ignore")
         return
