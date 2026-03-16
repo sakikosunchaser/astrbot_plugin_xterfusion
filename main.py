@@ -1,23 +1,20 @@
 import os
 import time
-import json
-import random
 import base64
-from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent
 
 COOLDOWN = 8    # 每群8秒防刷屏
 
-# 你的 mp3 绝对路径
-VOICE_PATH = r"C:\Users\22849\Downloads\split.mp3"
+# 填写你实际MP3语音路径（改为你的实际路径！）
+VOICE_PATH = r"D:\split\split.mp3"
 
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "Win本地mp3关键词base64语音插件",
-    "v1.9.0",
+    "本地mp3关键词base64语音插件终极版",
+    "v2.0.0",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -26,7 +23,7 @@ class XterFusionPlugin(Star):
         self.last_group_send = {}
 
     def _is_trigger(self, message: str):
-        # 自定义关键词逻辑，这里为"only feels like"
+        # 定义关键词触发逻辑，例如只要消息里包含 "only feels like" 就播
         return "only feels like" in message
 
 @filter.event_message_type(filter.EventMessageType.ALL)
@@ -43,12 +40,12 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
         return
     self.last_group_send[group_id] = now
 
-    # 发送base64语音
+    # 发送 base64 语音
     try:
+        logger.info(f"[xterfusion] 正在发送本地base64语音: {VOICE_PATH}")
         with open(VOICE_PATH, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("utf-8")
         cq = f"[CQ:record,file=base64://{b64}]"
-        logger.info(f"[xterfusion] send record BASE64 CQ")
         if hasattr(event, "raw_result"):
             yield event.raw_result(cq)
         elif hasattr(event, "plain_result"):
@@ -56,4 +53,4 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
     except Exception as e:
         logger.error(f"[xterfusion] base64语音发送失败: {e}")
         if hasattr(event, "plain_result"):
-            yield event.plain_result("语音文件base64发送失败！")
+            yield event.plain_result("语音文件base64发送失败！请检查路径和文件。")
