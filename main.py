@@ -4,7 +4,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -15,35 +15,14 @@ try:
 except Exception:
     httpx = None
 
-logger.error("[xterfusion] imported astrbot_plugin_xterfusion.main (runtime) OK")
-
-
-def _pick_group_decorator() -> Optional[Callable]:
-    """
-    在 v4.19.5 里 filter.on_message 不存在，所以这里从常见名字里挑一个实际存在的群消息装饰器。
-    你装好后看日志里打印的 dir(filter)，我也可以再帮你改成“精确名字”。
-    """
-    candidates = [
-        "group_message",
-        "on_group_message",
-        "group_msg",
-        "on_group_msg",
-        "group",
-        "on_group",
-    ]
-    for name in candidates:
-        dec = getattr(filter, name, None)
-        if callable(dec):
-            logger.error(f"[xterfusion] using filter decorator: filter.{name}()")
-            return dec
-    return None
+logger.error("[xterfusion] imported main OK (regex hook version)")
 
 
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
     "群聊检测 only feels like -> 发送 split.mp3 语音（NapCat / aiocqhttp）",
-    "v1.2.0",
+    "v1.2.1",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -51,22 +30,19 @@ class XterFusionPlugin(Star):
         super().__init__(context)
         self.config = config or {}
 
-        # 打印 filter 可用方法（用于确认到底有哪些装饰器）
-        try:
-            names = [n for n in dir(filter) if not n.startswith("_")]
-            logger.error("[xterfusion] dir(filter) = " + ", ".join(names))
-        except Exception as e:
-            logger.error(f"[xterfusion] dump dir(filter) failed: {e}")
-
+        # 关键词 & 行为
         self.keyword = self.config.get("keyword", "only feels like")
         self.ignore_case = bool(self.config.get("ignore_case", True))
         self.cooldown_seconds = int(self.config.get("cooldown_seconds", 10))
+        self.group_only = bool(self.config.get("group_only", True))
 
+        # 音频 raw
         self.audio_raw_url = self.config.get(
             "audio_raw_url",
             "https://raw.githubusercontent.com/sakikosunchaser/astrbot_plugin_xterfusion/main/split.mp3",
         ).strip()
 
+        # 缓存路径
         base_data_dir = Path(os.getenv("ASTRBOT_DATA_DIR", "data"))
         self.cache_dir = base_data_dir / "plugins_data" / "xterfusion"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -79,7 +55,8 @@ class XterFusionPlugin(Star):
 
         logger.error(
             f"[xterfusion] init OK. keyword={self.keyword!r}, ignore_case={self.ignore_case}, "
-            f"cooldown={self.cooldown_seconds}s, raw={self.audio_raw_url}, cache={self.audio_path}"
+            f"group_only={self.group_only}, cooldown={self.cooldown_seconds}s, "
+            f"raw={self.audio_raw_url}, cache={self.audio_path}"
         )
 
     async def _ensure_audio_cached(self):
@@ -98,25 +75,19 @@ class XterFusionPlugin(Star):
         tmp = self.audio_path.with_suffix(".mp3.tmp")
         tmp.write_bytes(data)
         tmp.replace(self.audio_path)
-        logger.error(f"[xterfusion] audio cached: {self.audio_path} ({self.audio_path.stat().st_size} bytes)")
+        logger.error(f"[xterfusion] cached audio: {self.audio_path} size={self.audio_path.stat().st_size}")
 
-    async def handle_group_message(self, event: AstrMessageEvent):
-        # 只处理群消息（避免 send_private_msg ApiNotAvailable）
-        if not event.is_group_message():
+    async def _trigger(self, event: AstrMessageEvent):
+        # 只群聊（避免 send_private_msg ApiNotAvailable）
+        if self.group_only and not event.is_group_message():
+            logger.error("[xterfusion] matched in non-group message, ignored due to group_only")
             return
 
-        gid = str(event.get_group_id())
-        text = (event.message_str or "").strip()
-
-        logger.error(f"[xterfusion] incoming group={gid} text={text!r}")
-
-        if not text or not self._pattern.search(text):
-            return
-
+        gid = str(event.get_group_id()) if event.is_group_message() else "private"
         now = time.time()
         last = self._last_trigger_ts_by_group.get(gid, 0.0)
         if now - last < self.cooldown_seconds:
-            logger.error(f"[xterfusion] cooldown hit for group={gid}")
+            logger.error(f"[xterfusion] cooldown hit gid={gid}")
             return
         self._last_trigger_ts_by_group[gid] = now
 
@@ -131,7 +102,7 @@ class XterFusionPlugin(Star):
         cq1 = f"[CQ:record,file=file:///{audio_abs}]"
         cq2 = f"[CQ:record,file={audio_abs}]"
 
-        logger.error(f"[xterfusion] sending record, audio_abs={audio_abs}")
+        logger.error(f"[xterfusion] sending record. audio_abs={audio_abs}")
 
         if hasattr(event, "raw_result"):
             try:
@@ -142,16 +113,17 @@ class XterFusionPlugin(Star):
             yield event.raw_result(cq2)
             return
 
-        # 没 raw_result 就退化
         yield event.plain_result(cq1)
 
 
-# --- 绑定群消息装饰器（必须在模块 import 时执行） ---
-_group_dec = _pick_group_decorator()
-if _group_dec is None:
-    logger.error("[xterfusion] ERROR: cannot find group message decorator on filter.*")
-else:
-    @_group_dec()
-    async def _xterfusion_group_entry(self: XterFusionPlugin, event: AstrMessageEvent):
-        async for r in self.handle_group_message(event):
-            yield r
+# 这里用 filter.regex 订阅：只要消息文本里出现关键词就触发
+# 由于你开启 ignore_case，因此 regex 用 (?i) 做不区分大小写
+@filter.regex(r"(?i)only feels like")
+async def xterfusion_regex_entry(self: XterFusionPlugin, event: AstrMessageEvent):
+    # 额外防御：再次确认一下 message_str 里确实包含关键词
+    text = (event.message_str or "").strip()
+    logger.error(f"[xterfusion] regex hit, text={text!r}")
+    if not self._pattern.search(text):
+        return
+    async for r in self._trigger(event):
+        yield r
