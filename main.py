@@ -16,6 +16,13 @@ KEYWORD = "only feels like"
 VOICE_URL = "https://raw.githubusercontent.com/sakikosunchaser/astrbot_plugin_xterfusion/main/split.mp3"
 VOICE_CACHE_FILENAME = "split.mp3"
 
+@register(
+    "astrbot_plugin_xterfusion",
+    "sakikosunchaser",
+    "群聊关键词触发语音-超兼容新三国完全体",
+    "v1.3.2",
+    "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
+)
 class XterFusionPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -37,7 +44,7 @@ class XterFusionPlugin(Star):
             self.voice_path.write_bytes(r.content)
             logger.error("[xterfusion] voice download OK: %s", self.voice_path)
 
-# ======= 关键步骤：handler不写类里面，而是写外部函数，注册时自动注入实例self。=======
+# ======= handler必须在类外部，并确保第一个参数为 self =======
 @filter.regex(r"only feels like", ignore_case=True)
 async def g_voice(self: XterFusionPlugin, event):
     e = getattr(event, "raw_event", None)
@@ -65,13 +72,3 @@ async def g_voice(self: XterFusionPlugin, event):
         yield event.raw_result(cq)
     elif hasattr(event, "plain_result"):
         yield event.plain_result(cq)
-
-# ======= 一定要加在文件末尾 =======
-@register(
-    "astrbot_plugin_xterfusion",
-    "sakikosunchaser",
-    "群聊关键词触发语音-超兼容新三国完全体",
-    "v1.3.1",
-    "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
-)
-class_alias = XterFusionPlugin
