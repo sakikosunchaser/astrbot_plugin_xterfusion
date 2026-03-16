@@ -5,7 +5,7 @@ from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
-from astrbot.api.event import filter
+from astrbot.api.event import filter, AstrMessageEvent
 
 try:
     import httpx
@@ -19,8 +19,8 @@ VOICE_CACHE_FILENAME = "split.mp3"
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "群聊关键词触发语音（完全仿新三国插件写法）",
-    "v1.3.3",
+    "群聊关键词触发语音（仿新三国）",
+    "v1.4.0",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -44,24 +44,21 @@ class XterFusionPlugin(Star):
             self.voice_path.write_bytes(r.content)
             logger.error("[xterfusion] voice download OK: %s", self.voice_path)
 
-@filter.regex(r"only feels like", ignore_case=True)
-async def g_voice(self: XterFusionPlugin, event):
-    # 完全照新三国插件事件兼容判法
-    e = getattr(event, "raw_event", None)
-    if not isinstance(e, dict):
-        e = getattr(event, "event", None)
-    if not isinstance(e, dict):
-        e = getattr(event, "data", None)
-    logger.error(f"[xterfusion] handler triggered, event dict: {e!r}")
-    if not isinstance(e, dict) or e.get("message_type") != "group":
-        logger.error(f"[xterfusion] not group, ignore")
+@filter.event_message_type(filter.EventMessageType.ALL)
+async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent):
+    msg = event.message_str.strip() if hasattr(event, "message_str") else ""
+    msg_obj = getattr(event, "message_obj", None)
+    group_id = getattr(msg_obj, "group_id", None) if msg_obj else None
+    logger.error(f"[xterfusion] xterfusion_on_message: group_id={group_id}, msg={msg!r}")
+    if not group_id:
+        return  # 只允许群聊
+    if KEYWORD not in msg:
         return
-    gid = e.get("group_id")
     now = time.time()
-    if now - self.last_group_send.get(gid, 0) < 8:
-        logger.error(f"[xterfusion] cooldown for group {gid}, ignore")
+    if now - self.last_group_send.get(group_id, 0) < 8:
+        logger.error(f"[xterfusion] cooldown for group {group_id}, ignore")
         return
-    self.last_group_send[gid] = now
+    self.last_group_send[group_id] = now
     logger.error(f"[xterfusion] READY to send voice!!")
     try:
         await self._ensure_voice()
