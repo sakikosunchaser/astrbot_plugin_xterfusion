@@ -7,15 +7,15 @@ from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent
 
-AUDIO_DIR = Path(os.path.dirname(__file__))        # 音频、main.py、rules.json 同目录
+AUDIO_DIR = Path(os.path.dirname(__file__))        # 音频、rules.json、main.py同目录
 RULES_FILE = AUDIO_DIR / "rules.json"
 COOLDOWN = 8    # 每群8秒防刷屏
 
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "本地mp3关键词单条语音-仿新三国风格",
-    "v1.8.0",
+    "本地mp3关键词单条语音-修正版",
+    "v1.8.1",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -53,20 +53,23 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
     msg_obj = getattr(event, "message_obj", None)
     group_id = getattr(msg_obj, "group_id", None) if msg_obj else None
     if not group_id:
-        return  # 只响应该插件仅限群聊
+        return
     # 防刷
     now = time.time()
     if now - self.last_group_send.get(group_id, 0) < COOLDOWN:
         return
-    # 匹配关键词
     matched = self._match_audios(msg)
     if not matched:
         return
     self.last_group_send[group_id] = now
-    # 只发首个/随机一个音频（完全仿新三国）
+    # 随机选一个音频（与新三国一致）
     audio_path = random.choice(matched)
     logger.info(f"[xterfusion] 命中，发送语音: {audio_path}")
-    cq = f"[CQ:record,file=file:///{audio_path.resolve()}]"
+
+    # 正确标准的 CQ:record 三斜杠路径
+    abs_path = audio_path.resolve().as_posix()
+    cq = f"[CQ:record,file=file:///{abs_path}]"
+    logger.info(f"[xterfusion] send record file CQ: {cq}")
     if hasattr(event, "raw_result"):
         yield event.raw_result(cq)
     elif hasattr(event, "plain_result"):
