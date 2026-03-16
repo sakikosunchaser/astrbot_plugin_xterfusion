@@ -1,7 +1,8 @@
 import os
-import json
 import time
+import json
 import random
+import base64
 from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
@@ -9,14 +10,14 @@ from astrbot.api.event import filter, AstrMessageEvent
 
 COOLDOWN = 8    # 每群8秒防刷屏
 
-# Windows 本地绝对路径
-CQ_PATH = r"C:\Users\22849\Downloads\split.mp3"
+# 你的 mp3 绝对路径
+VOICE_PATH = r"C:\Users\22849\Downloads\split.mp3"
 
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "本地绝对路径mp3关键词单条语音- Win修正版",
-    "v1.8.3",
+    "Win本地mp3关键词base64语音插件",
+    "v1.9.0",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
@@ -25,7 +26,7 @@ class XterFusionPlugin(Star):
         self.last_group_send = {}
 
     def _is_trigger(self, message: str):
-        # 你自定义关键词，这里假设包含"only feels like"
+        # 自定义关键词逻辑，这里为"only feels like"
         return "only feels like" in message
 
 @filter.event_message_type(filter.EventMessageType.ALL)
@@ -42,11 +43,17 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
         return
     self.last_group_send[group_id] = now
 
-    # 修正路径格式，适配Windows
-    cq_path = CQ_PATH.replace("\\", "/")   # C:/Users/22849/Downloads/split.mp3
-    cq = f"[CQ:record,file=file:///{cq_path}]"
-    logger.info(f"[xterfusion] send record file CQ: {cq}")
-    if hasattr(event, "raw_result"):
-        yield event.raw_result(cq)
-    elif hasattr(event, "plain_result"):
-        yield event.plain_result(cq)
+    # 发送base64语音
+    try:
+        with open(VOICE_PATH, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        cq = f"[CQ:record,file=base64://{b64}]"
+        logger.info(f"[xterfusion] send record BASE64 CQ")
+        if hasattr(event, "raw_result"):
+            yield event.raw_result(cq)
+        elif hasattr(event, "plain_result"):
+            yield event.plain_result(cq)
+    except Exception as e:
+        logger.error(f"[xterfusion] base64语音发送失败: {e}")
+        if hasattr(event, "plain_result"):
+            yield event.plain_result("语音文件base64发送失败！")
