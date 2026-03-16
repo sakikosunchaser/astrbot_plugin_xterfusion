@@ -7,45 +7,26 @@ from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent
 
-AUDIO_DIR = Path(os.path.dirname(__file__))        # 音频、rules.json、main.py同目录
-RULES_FILE = AUDIO_DIR / "rules.json"
 COOLDOWN = 8    # 每群8秒防刷屏
+
+# Windows 本地绝对路径
+CQ_PATH = r"C:\Users\22849\Downloads\split.mp3"
 
 @register(
     "astrbot_plugin_xterfusion",
     "sakikosunchaser",
-    "本地mp3关键词单条语音-三斜杠极致修正",
-    "v1.8.2",
+    "本地绝对路径mp3关键词单条语音- Win修正版",
+    "v1.8.3",
     "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
 )
 class XterFusionPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
-        self.rules = self._load_rules()
         self.last_group_send = {}
 
-    def _load_rules(self):
-        try:
-            with open(RULES_FILE, "r", encoding="utf-8") as f:
-                rules = json.load(f)
-            logger.info(f"[xterfusion] 成功加载关键词规则: {len(rules)} 条")
-            return rules
-        except Exception as e:
-            logger.error(f"[xterfusion] 加载 rules.json 失败: {e}")
-            return []
-
-    def _match_audios(self, message: str):
-        results = []
-        for rule in self.rules:
-            keyword = rule.get("keyword", "")
-            audio = rule.get("audio", "")
-            if keyword and keyword in message:
-                audio_path = AUDIO_DIR / audio
-                if audio_path.exists():
-                    results.append(audio_path)
-                else:
-                    logger.warning(f"[xterfusion] 缺失音频: {audio_path}")
-        return results
+    def _is_trigger(self, message: str):
+        # 你自定义关键词，这里假设包含"only feels like"
+        return "only feels like" in message
 
 @filter.event_message_type(filter.EventMessageType.ALL)
 async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent):
@@ -57,16 +38,13 @@ async def xterfusion_on_message(self: XterFusionPlugin, event: AstrMessageEvent)
     now = time.time()
     if now - self.last_group_send.get(group_id, 0) < COOLDOWN:
         return
-    matched = self._match_audios(msg)
-    if not matched:
+    if not self._is_trigger(msg):
         return
     self.last_group_send[group_id] = now
-    audio_path = random.choice(matched)
-    logger.info(f"[xterfusion] 命中，发送语音: {audio_path}")
 
-    # 三斜杠：file:///绝对路径（绝对路径无首斜杠）
-    abs_path_noslash = audio_path.resolve().as_posix().lstrip('/')
-    cq = f"[CQ:record,file=file:///{abs_path_noslash}]"
+    # 修正路径格式，适配Windows
+    cq_path = CQ_PATH.replace("\\", "/")   # C:/Users/22849/Downloads/split.mp3
+    cq = f"[CQ:record,file=file:///{cq_path}]"
     logger.info(f"[xterfusion] send record file CQ: {cq}")
     if hasattr(event, "raw_result"):
         yield event.raw_result(cq)
