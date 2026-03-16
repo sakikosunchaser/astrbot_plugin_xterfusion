@@ -1,4 +1,11 @@
 from __future__ import annotations
+from astrbot.api import logger
+from astrbot.api.event import filter
+
+try:
+    logger.error("[xterfusion-debug] dir(filter) = " + ", ".join([n for n in dir(filter) if not n.startswith("_")]))
+except Exception as e:
+    logger.error(f"[xterfusion-debug] dump dir(filter) failed: {e}")
 
 import os
 import re
