@@ -1,148 +1,133 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-aiocqhttp 插件：当收到精确等于 "only feels like" 的消息时，发送本地 split.MP3 作为语音（record）。
+from __future__ import annotations
 
-行为：
-- 优先使用环境变量 MP3_PATH / KEYWORD / LISTEN_SCOPE（环境变量优先）。
-- 否则使用 config.yaml 中的配置（若存在）。
-- 默认 MP3 路径为与本脚本同目录下的 split.MP3（相对路径 ./split.MP3 -> 解析为绝对路径）。
-- 在群内触发则回群，在私聊触发则回私聊。
-
-安装依赖参考 requirements.txt。
-"""
 import os
-import logging
-import yaml
-from aiocqhttp import CQHttp
+import re
+import time
+from pathlib import Path
+from typing import Optional
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("split_voice_trigger")
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.star import Context, Star, register
 
-# 默认 config 文件路径（同目录下的 config.yaml）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.yaml")
+try:
+    import httpx
+except Exception:  # pragma: no cover
+    httpx = None
 
-def load_config():
-    # defaults
-    cfg = {
-        "keyword": "only feels like",
-        # default to split.MP3 in same directory as this script
-        "mp3_path": os.path.join(BASE_DIR, "split.MP3"),
-        "listen_scope": "both",  # both / group / private
-    }
 
-    # override from environment
-    if os.environ.get("KEYWORD"):
-        cfg["keyword"] = os.environ["KEYWORD"]
-    if os.environ.get("MP3_PATH"):
-        cfg["mp3_path"] = os.environ["MP3_PATH"]
-    if os.environ.get("LISTEN_SCOPE"):
-        cfg["listen_scope"] = os.environ["LISTEN_SCOPE"]
+@register(
+    "astrbot_plugin_xterfusion",
+    "sakikosunchaser",
+    "检测到关键词 only feels like 就发送 split.mp3 语音（NapCat / aiocqhttp）",
+    "1.2.0",
+    "https://github.com/sakikosunchaser/astrbot_plugin_xterfusion",
+)
+class XterFusionPlugin(Star):
+    def __init__(self, context: Context, config: Optional[dict] = None):
+        super().__init__(context)
+        self.config = config or {}
 
-    # override from yaml if present (lowest priority compared to env)
-    if os.path.exists(DEFAULT_CONFIG_PATH):
+        # 触发关键词
+        self.keyword = self.config.get("keyword", "only feels like")
+        self.ignore_case = bool(self.config.get("ignore_case", True))
+
+        # 防刷屏冷却（秒）
+        self.cooldown_seconds = int(self.config.get("cooldown_seconds", 10))
+
+        # 是否只在群聊触发
+        self.group_only = bool(self.config.get("group_only", True))
+
+        # split.mp3 raw 下载地址（仓库 main 分支根目录 split.mp3）
+        self.audio_raw_url = self.config.get(
+            "audio_raw_url",
+            "https://raw.githubusercontent.com/sakikosunchaser/astrbot_plugin_xterfusion/main/split.mp3",
+        ).strip()
+
+        # 缓存目录：优先使用 ASTRBOT_DATA_DIR（若未设置则用 data/）
+        base_data_dir = Path(os.getenv("ASTRBOT_DATA_DIR", "data"))
+        self.cache_dir = base_data_dir / "plugins_data" / "xterfusion"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.audio_path = self.cache_dir / "split.mp3"
+
+        # 冷却记录（按群/私聊 session）
+        self._last_trigger_ts: dict[str, float] = {}
+
+        flags = re.IGNORECASE if self.ignore_case else 0
+        self._pattern = re.compile(re.escape(self.keyword), flags=flags)
+
+        logger.info(
+            f"[xterfusion] loaded. keyword={self.keyword!r}, ignore_case={self.ignore_case}, "
+            f"group_only={self.group_only}, cooldown={self.cooldown_seconds}s, "
+            f"audio_raw_url={self.audio_raw_url}, cache={self.audio_path}"
+        )
+
+    @filter.on_message()
+    async def on_message(self, event: AstrMessageEvent):
+        # 1) 群聊限制
+        if self.group_only and not event.is_group_message():
+            return
+
+        # 2) 匹配关键词
+        text = (event.message_str or "").strip()
+        if not text or not self._pattern.search(text):
+            return
+
+        # 3) 冷却
+        session_key = self._session_key(event)
+        now = time.time()
+        last = self._last_trigger_ts.get(session_key, 0.0)
+        if now - last < self.cooldown_seconds:
+            return
+        self._last_trigger_ts[session_key] = now
+
+        # 4) 确保音频已缓存
         try:
-            with open(DEFAULT_CONFIG_PATH, "r", encoding="utf-8") as f:
-                y = yaml.safe_load(f) or {}
-            if "keyword" in y:
-                cfg["keyword"] = y["keyword"]
-            if "mp3_path" in y:
-                cfg["mp3_path"] = y["mp3_path"]
-            if "listen_scope" in y:
-                cfg["listen_scope"] = y["listen_scope"]
+            await self._ensure_audio_cached()
         except Exception as e:
-            logger.warning("读取 config.yaml 失败：%s", e)
-
-    # normalize mp3_path: expanduser, make absolute if relative
-    mp3 = cfg["mp3_path"]
-    mp3 = os.path.expanduser(mp3)
-    if not os.path.isabs(mp3):
-        mp3 = os.path.abspath(os.path.join(BASE_DIR, mp3))
-    cfg["mp3_path"] = mp3
-
-    return cfg
-
-config = load_config()
-KEYWORD = config["keyword"].strip()
-MP3_PATH = config["mp3_path"]
-LISTEN_SCOPE = config.get("listen_scope", "both").lower()
-
-logger.info("配置：KEYWORD=%r, MP3_PATH=%r, LISTEN_SCOPE=%r", KEYWORD, MP3_PATH, LISTEN_SCOPE)
-
-# 如果需要通过 HTTP API 主动调用 go-cqhttp，请设置环境变量 CQHTTP_API（如 http://127.0.0.1:5700）
-api_root = os.environ.get("CQHTTP_API")
-bot = CQHttp(api_root=api_root) if api_root else CQHttp()
-
-def message_to_text(ctx):
-    # 尝试获取文本消息内容，支持 raw_message 或 message segments
-    if not ctx:
-        return ""
-    if "raw_message" in ctx and isinstance(ctx["raw_message"], str):
-        return ctx["raw_message"]
-    if "message" in ctx:
-        m = ctx["message"]
-        if isinstance(m, str):
-            return m
-        if isinstance(m, list):
-            parts = []
-            for seg in m:
-                if isinstance(seg, dict) and seg.get("type") == "text":
-                    parts.append(seg.get("text", ""))
-                elif isinstance(seg, str):
-                    parts.append(seg)
-            return "".join(parts)
-    return ""
-
-def should_listen_for(scope, ctx):
-    if scope == "both":
-        return True
-    if scope == "group" and "group_id" in ctx:
-        return True
-    if scope == "private" and "user_id" in ctx and "group_id" not in ctx:
-        return True
-    return False
-
-@bot.on_message()
-async def on_message(ctx):
-    try:
-        if not should_listen_for(LISTEN_SCOPE, ctx):
+            logger.error(f"[xterfusion] ensure_audio_cached failed: {e}")
+            yield event.plain_result("语音资源准备失败（下载或缓存失败），请检查网络/配置。")
             return
 
-        text = message_to_text(ctx)
-        if text is None:
+        # 5) 发送语音（CQ:record）
+        audio_abs = str(self.audio_path.resolve())
+        logger.info(f"[xterfusion] trigger -> send record: {audio_abs}")
+
+        # 兼容尝试 1：file=file:///abs/path
+        cq1 = f"[CQ:record,file=file:///{audio_abs}]"
+        try:
+            yield event.raw_result(cq1)
+            return
+        except Exception as e:
+            logger.warning(f"[xterfusion] send record style1 failed: {e}")
+
+        # 兼容尝试 2：file=/abs/path
+        cq2 = f"[CQ:record,file={audio_abs}]"
+        yield event.raw_result(cq2)
+
+    def _session_key(self, event: AstrMessageEvent) -> str:
+        if event.is_group_message():
+            return f"g:{event.get_group_id()}"
+        return f"p:{event.get_sender_id()}"
+
+    async def _ensure_audio_cached(self):
+        if self.audio_path.exists() and self.audio_path.stat().st_size > 0:
             return
 
-        # 精确匹配：去除首尾空白后完全等于 KEYWORD
-        if text.strip() != KEYWORD:
-            return
+        if not self.audio_raw_url:
+            raise RuntimeError("audio_raw_url is empty.")
 
-        # 检查本地文件存在（用户选择 A：与 go-cqhttp 在同一主机）
-        if not os.path.exists(MP3_PATH):
-            logger.error("MP3 文件不存在：%s", MP3_PATH)
-            # 可选择回复提示
-            if "group_id" in ctx:
-                await bot.send_group_msg(group_id=ctx["group_id"], message="语音文件未找到（管理员错误配置）。")
-            else:
-                await bot.send_private_msg(user_id=ctx.get("user_id"), message="语音文件未找到（管理员错误配置）。")
-            return
+        if httpx is None:
+            raise RuntimeError(
+                "httpx not installed. Add httpx to plugin requirements or install it in AstrBot env."
+            )
 
-        # 发送 CQ 码 record 段，file 字段使用本地绝对路径
-        # go-cqhttp 会在服务器端读取该文件并发送语音
-        cq_record = f"[CQ:record,file={MP3_PATH}]"
-        if "group_id" in ctx:
-            await bot.send_group_msg(group_id=ctx["group_id"], message=cq_record)
-            logger.info("在群 %s 触发，发送语音 %s", ctx["group_id"], MP3_PATH)
-        else:
-            await bot.send_private_msg(user_id=ctx.get("user_id"), message=cq_record)
-            logger.info("在私聊 %s 触发，发送语音 %s", ctx.get("user_id"), MP3_PATH)
+        logger.info(f"[xterfusion] downloading split.mp3 from {self.audio_raw_url}")
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            r = await client.get(self.audio_raw_url)
+            r.raise_for_status()
+            data = r.content
 
-    except Exception as e:
-        logger.exception("处理消息时发生错误：%s", e)
-
-if __name__ == "__main__":
-    # 作为独立服务启动，默认 host 0.0.0.0 port 5701（与 go-cqhttp 的回调地址对应）
-    host = os.environ.get("PLUGIN_HOST", "0.0.0.0")
-    port = int(os.environ.get("PLUGIN_PORT", 5701))
-    logger.info("启动插件监听 %s:%s（api_root=%r）", host, port, api_root)
-    bot.run(host=host, port=port)
+        tmp = self.audio_path.with_suffix(".mp3.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(self.audio_path)
